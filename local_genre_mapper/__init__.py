@@ -6,7 +6,8 @@ from picard.metadata import register_track_metadata_processor
 PLUGIN_NAME = "Local Genre Mapper"
 PLUGIN_AUTHOR = "JamN3k"
 PLUGIN_DESCRIPTION = """
-Maps local genres using regex rules.
+Maps local genres using regex rules to
+fix up genre tags from my collection to suit my personal taste.
 """
 PLUGIN_VERSION = "0.4"
 PLUGIN_API_VERSIONS = ["2.0"]
