@@ -1,0 +1,14 @@
+uuid = "000d2587-fa68-4f2f-a788-477d7d30dbb7"
+name = "Local Genre Mapper"
+authors = ["JamN3k"]
+description = """
+Maps local genres using regex rules to
+fix up genre tags from my collection to suit my personal taste.
+..."""
+api = ['3.0']
+license = "GPL-2.0-or-later"
+license_url = "https://www.gnu.org/licenses/gpl-2.0.html"
+long_description = """
+Maps local genres using regex rules to
+fix up genre tags from my collection to suit my personal taste.
+"""
