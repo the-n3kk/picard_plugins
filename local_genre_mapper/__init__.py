@@ -2,6 +2,11 @@
 
 import re
 from picard.metadata import register_track_metadata_processor
+from picard import log
+import json
+from pathlib import Path
+import threading
+import queue
 
 PLUGIN_NAME = "Local Genre Mapper"
 PLUGIN_AUTHOR = "JamN3k"
@@ -9,182 +14,173 @@ PLUGIN_DESCRIPTION = """
 Maps local genres using regex rules to
 fix up genre tags from my collection to suit my personal taste.
 """
-PLUGIN_VERSION = "0.4"
+PLUGIN_VERSION = "0.7.3"
 PLUGIN_API_VERSIONS = ["2.0"]
-
-GENRE_MAP = [
-
-    # -------------------------
-    # DOUJIN (very high priority)
-    # -------------------------
-    (r"同人.*", "doujin"),
-    (r".*doujin.*", "doujin"),
-    (r".*東方.*", "doujin"),
-
-    # -------------------------
-    # DIRECT LABELS
-    # -------------------------
-    (r"\bCutesy\b", "Cute"),
-    (r"\bUtaite\b", "Cover"),
-
-    (r"Rock & Roll", "Rock'n Roll"),
-    (r"エレクトロニック", "EDM"),
-    (r"Streetpunk", "Punk"),
-    (r"Soul and Reggae", "Soul"),
-    (r"\bAor\b", "Rock"),
-    (r"Pop And Chart", "Pop"),
-    (r"Drum and Bass", "DnB"),
-    (r"Drumstep", "DnB"),
-    (r"Mediaevil", "Medieval"),
-
-    # -------------------------
-    # METAL FAMILY (specific → broad inside metal)
-    # -------------------------
-    (r"Neo.*classical Metal", "Metal"),
-    (r"German Metal", "Metal"),
-    (r"Melodic Metal", "Metal"),
-    (r"Alternative Metal", "Metal"),
-    (r"British Metal", "Metal"),
-    (r"Extreme Metal", "Metal"),
-
-    (r"Power Metal", "Power Metal"),
-    (r"Epic Metal", "Power Metal"),
-    (r"Death Metal", "Death Metal"),
-    (r"Thrash.*", "Thrash Metal"),
-    (r"Metalcore", "Metalcore"),
-    (r"Heavy Metal", "Metal"),
-    (r".*Folk Metal", "Folk Metal"),
-
-    (r".*honic Rock", "Symphonic Metal"),
-    (r".*honic", "Symphonic Metal"),
-    (r"Symphonic Metal", "Symphonic Metal"),
-
-    # -------------------------
-    # INSTRUMENTAL / ATMOSPHERIC
-    # -------------------------
-    (r".*Instrumental.*", "Instrumental"),
-    (r".*Orchestra.*", "Instrumental"),
-    (r"Chill.*", "Chill"),
-
-    # -------------------------
-    # ANIME / MEDIA FRANCHISE
-    # -------------------------
-    (r"Anime Music", "Anime"),
-    (r"Pokemon", "Anime"),
-    (r"Angel Beats", "Anime"),
-    (r"Spice and Wolf", "Anime"),
-    (r"Bakemonogatari", "Anime"),
-    (r"Evangelion", "Anime"),
-    (r"Bebop", "Anime"),
-
-    # -------------------------
-    # SOUNDTRACK / MEDIA
-    # -------------------------
-    (r".*Game.*", "Soundtrack"),
-    (r".*Gaming.*", "Soundtrack"),
-    (r".*Film.*", "Soundtrack"),
-    (r"\bVgm\b", "Soundtrack"),
-    (r".*Movie.*", "Soundtrack"),
-    (r".*Television.*", "Soundtrack"),
-    (r".*TV.*", "Soundtrack"),
-    (r".*Podcast.*", "Soundtrack"),
-    (r".*TTRPG.*", "Soundtrack"),
-    (r".*Score.*", "Soundtrack"),
-    (r".*OST.*", "Soundtrack"),
-    (r".*Theme.*", "Soundtrack"),
-
-    # -------------------------
-    # VTUBER
-    # -------------------------
-    (r"Hololive", "VTuber"),
-    (r".*Vtuber.*", "VTuber"),
-    (r".*Virtual Youtuber.*", "VTuber"),
-
-    # -------------------------
-    # IDOL / POP SUBCULTURE
-    # -------------------------
-    (r".*Japanese Teen Pop.*", "Idol Pop"),
-    (r".*idol.*", "Idol Pop"),
-
-    # -------------------------
-    # CORE GENRES
-    # -------------------------
-    (r".*Trap", "Trap"),
-    (r".*\sPunk", "Punk"),
-    (r".*Jazz", "Jazz"),
-    (r".*Funk", "Funk"),
-    (r".*Rock", "Rock"),
-    (r".*Dubstep", "Dubstep"),
-    (r".*House", "House"),
-    (r".*Disco", "Disco"),
-    (r".*Groov.*", "Groove"),
-    (r".*Future Bass", "Future Bass"),
-    (r".*\sRap", "Rap"),
-    (r".*Indie", "Indie"),
-    (r".*R&B", "R&B"),
-    (r".*Dance", "Dance"),
-    (r".*Jungle", "Jungle"),
-    (r".*Hardcore", "Hardcore"),
-    (r".*Blues", "Blues"),
-    (r".*Hip[\s-]?Hop", "Hip Hop"),
-    (r".*Bass", "DnB"),
-    (r".*Country.*", "Country"),
-
-    # -------------------------
-    # ELECTRO SWING
-    # -------------------------
-    (r"Electro.*swing", "Electro Swing"),
-
-    # -------------------------
-    # FOLK FAMILY
-    # -------------------------
-    (r"Celtic", "Folk"),
-    (r"Slavic", "Folk"),
-    (r".*Folk", "Folk"),
-
-    # -------------------------
-    # POP FAMILY (lowest priority)
-    # -------------------------
-    (r".*J[\s-]?Pop", "J Pop"),
-    (r".*K[\s-]?Pop", "K Pop"),
-    (r".*City Pop", "City Pop"),
-    (r".*Pop.*", "Pop"),
-
-    (r".*[EÉ]lectro.*", "EDM"),
-
-]
-
-COMPILED_MAP = [
-    (re.compile(pattern, re.IGNORECASE), replacement)
-    for pattern, replacement in GENRE_MAP
-]
+LASTFM_API_KEY = "98654a91f7e96b224e736286f6b87d03"
 
 GENRE_SPLIT_PATTERN = re.compile(r"[\/;,]")
 
+LASTFM_CACHE = {}
+ENRICHMENT_CACHE = {}
+PENDING_REQUESTS = set()
+LOCK = threading.Lock()
 
-def process_genres(album, metadata, track, release):
-    genres = metadata.getall("genre")
+LASTFM_QUEUE = queue.Queue()
+LASTFM_RESULTS = {}
 
-    if not genres:
-        return
 
+def load_genre_map():
+    path = f'{Path(__file__).parent}/genre_map.json'
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+
+    return [
+        (re.compile(pattern, re.IGNORECASE), target_genre)
+        for pattern, target_genre in raw
+    ]
+
+
+COMPILED_MAP = load_genre_map()
+
+
+def load_filter_list():
+    path = Path(__file__).parent / "filter_list.json"
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+
+    return raw
+
+
+FILTER_LIST = load_filter_list()
+
+
+def fast_map_genres(genres):
     new_genres = []
 
     for genre in genres:
-        for normalized_genre in [g.strip() for g in GENRE_SPLIT_PATTERN.split(genre) if g.strip()]:
-            mapped = normalized_genre.strip()
+        parts = [g.strip().lower() for g in GENRE_SPLIT_PATTERN.split(genre) if g.strip()]
+
+        for part in parts:
+            mapped = part
 
             for regex, replacement in COMPILED_MAP:
-
-                if regex.search(normalized_genre):
+                if regex.search(part):
                     mapped = replacement
                     break
 
             if mapped not in new_genres:
-                new_genres.append(mapped)
+                new_genres.append(mapped.lower())
 
-    metadata["genre"] = new_genres
-    metadata["genre_o"] = genres
+    return new_genres
+
+
+def process_genres(album, metadata, track, release):
+    album_filenames = album.tagger.get_files_from_objects([album])
+    log.warning(album_filenames)
+
+    return
+
+    genres = metadata.getall("genre")
+    album_artist = metadata.get("albumartist", "")
+    track_title = metadata.get("title", "")
+
+    fast_genres = fast_map_genres(genres)
+
+    if len(fast_genres) < 3:
+        key = (album_artist, track_title)
+
+        if key in LASTFM_CACHE:
+            # Already cached — use immediately
+            extra = LASTFM_CACHE[key]
+            fast_genres = fast_map_genres(fast_genres + extra)
+            _finalize_genres(metadata, fast_genres, genres + extra)
+        else:
+            # Kick off async request, hold finalization open
+            album._requests += 1
+            _finalize_genres(metadata, fast_genres, genres)  # write what we have now
+
+            def handle_response(response, reply, error):
+                try:
+                    if not error:
+                        tags = response.get("toptags", {}).get("tag", [])
+                        tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:4]
+                        extra = [t["name"] for t in tags]
+
+                        if not extra:
+                            # Fall back to artist tags
+                            _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres)
+                            return
+
+                        LASTFM_CACHE[key] = extra
+                        enriched = fast_map_genres(fast_genres + extra)
+                        _finalize_genres(metadata, enriched, genres + extra)
+                except Exception as e:
+                    log.debug(f"Last.fm response error: {e}")
+                finally:
+                    album._requests -= 1
+                    if not album._requests:
+                        album._finalize_loading(None)
+
+            album.tagger.webservice.get_url(
+                url="https://ws.audioscrobbler.com/2.0/",
+                handler=handle_response,
+                parse_response_type="json",
+                priority=False,
+                important=False,
+                queryargs={
+                    "method": "track.getTopTags",
+                    "artist": album_artist,
+                    "track": track_title,
+                    "api_key": LASTFM_API_KEY,
+                    "format": "json",
+                }
+            )
+            return
+    _finalize_genres(metadata, fast_genres, genres)
+
+
+def _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres):
+    key = ("artist", album_artist)
+    album._requests += 1
+
+    def handle_artist_response(response, reply, error):
+        try:
+            if not error:
+                tags = response.get("toptags", {}).get("tag", [])
+                tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:4]
+                extra = [t["name"] for t in tags]
+                LASTFM_CACHE[key] = extra
+                enriched = fast_map_genres(fast_genres + extra)
+                _finalize_genres(metadata, enriched, genres)
+        except Exception as e:
+            log.debug(f"Last.fm artist response error: {e}")
+        finally:
+            album._requests -= 1
+            if not album._requests:
+                album._finalize_loading(None)
+
+    album.tagger.webservice.get_url(
+        url="https://ws.audioscrobbler.com/2.0/",
+        handler=handle_artist_response,
+        parse_response_type="json",
+        priority=False,
+        important=False,
+        queryargs={
+            "method": "artist.getTopTags",
+            "artist": album_artist,
+            "api_key": LASTFM_API_KEY,
+            "format": "json",
+        }
+    )
+
+
+def _finalize_genres(metadata, fast_genres, original_genres):
+    final = []
+    for g in fast_genres:
+        if g not in FILTER_LIST and g not in final:
+            final.append(g)
+    metadata["genre"] = final
+    metadata["genre_o"] = original_genres
 
 
 register_track_metadata_processor(process_genres, priority=9999)
