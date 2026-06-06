@@ -46,9 +46,11 @@ with open(path, "r", encoding="utf-8") as f:
 FILTER_LIST = [re.compile(p, re.IGNORECASE) for p in patterns]
 
 
-
 def fast_map_genres(genres):
     new_genres = []
+
+    if not genres:
+        return []
 
     for genre in genres:
         parts = [g.strip().lower() for g in GENRE_SPLIT_PATTERN.split(genre) if g.strip()]
@@ -77,11 +79,13 @@ def process_genres(album, metadata, track, release):
     fast_genres = fast_map_genres(genres)
 
     # Skip tracks which don't exist in local files
-    track_in_files = any(track_title.lower() in str(filename).lower() for filename in album_filenames)
-    if not track_in_files:
+    normalized_name = re.sub(r'[\*;<>"|?]_', '_', track_title.lower())
+    if not any(normalized_name in str(filename).lower() for filename in album_filenames):
+        _finalize_genres(metadata, fast_genres, genres)
         log.debug(f"<{track_title}> not found in {album_filenames} - skipping")
         return
 
+    # we have less than 3 genres, we should add more
     if len(fast_genres) < 3:
         key = (album_artist, track_title)
 
@@ -94,7 +98,6 @@ def process_genres(album, metadata, track, release):
         else:
             # Kick off async request, hold finalization open
             album._requests += 1
-            _finalize_genres(metadata, fast_genres, genres)
 
             def handle_response(response, reply, error):
                 try:
@@ -133,6 +136,8 @@ def process_genres(album, metadata, track, release):
                 }
             )
             return
+
+    # there's 3+ genres
     _finalize_genres(metadata, fast_genres, genres)
 
 
