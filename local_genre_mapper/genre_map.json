@@ -2,8 +2,8 @@
     ["同人.*", "doujin"],
     [".*doujin.*", "doujin"],
     [".*東方.*", "doujin"],
+    ["touhou", "doujin"],
 
-    ["\\bCutesy\\b", "Cute"],
     ["\\bUtaite\\b", "Cover"],
 
     [".*ambient", "ambient"],
@@ -16,8 +16,10 @@
     ["bassline", "EDM"],
     ["Streetpunk", "Punk"],
     ["Soul and Reggae", "Soul"],
+    ["hard.*heavy","rock"],
     ["\\bAor\\b", "Rock"],
     ["Pop And Chart", "Pop"],
+    ["new wave", "pop"],
     ["Drum and Bass", "EDM"],
     ["Drumstep", "Dubstep"],
     ["Mediaevil", "Medieval"],
@@ -57,7 +59,8 @@
     ["Bebop", "Anime"],
     ["Software as artist", "Vocaloid"],
     ["Project Sekai", "Vocaloid"],
-
+    
+    ["sountrack|soundtack", "soundtrack"],
     [".*Game.*", "Soundtrack"],
     [".*Gaming.*", "Soundtrack"],
     [".*Film.*", "Soundtrack"],

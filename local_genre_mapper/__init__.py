@@ -14,7 +14,7 @@ PLUGIN_DESCRIPTION = """
 Maps local genres using regex rules to
 fix up genre tags from my collection to suit my personal taste.
 """
-PLUGIN_VERSION = "0.7.3"
+PLUGIN_VERSION = "0.9.0"
 PLUGIN_API_VERSIONS = ["2.0"]
 LASTFM_API_KEY = "98654a91f7e96b224e736286f6b87d03"
 
@@ -29,29 +29,22 @@ LASTFM_QUEUE = queue.Queue()
 LASTFM_RESULTS = {}
 
 
-def load_genre_map():
-    path = f'{Path(__file__).parent}/genre_map.json'
-    with open(path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
+# load resources
+path = f'{Path(__file__).parent}/genre_map.json'
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
 
-    return [
-        (re.compile(pattern, re.IGNORECASE), target_genre)
-        for pattern, target_genre in raw
-    ]
+COMPILED_MAP = [
+    (re.compile(pattern, re.IGNORECASE), target_genre)
+    for pattern, target_genre in data
+]
 
+path = Path(__file__).parent / "filter_list.json"
+with open(path, "r", encoding="utf-8") as f:
+    patterns = json.load(f)
 
-COMPILED_MAP = load_genre_map()
+FILTER_LIST = [re.compile(p, re.IGNORECASE) for p in patterns]
 
-
-def load_filter_list():
-    path = Path(__file__).parent / "filter_list.json"
-    with open(path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-
-    return raw
-
-
-FILTER_LIST = load_filter_list()
 
 
 def fast_map_genres(genres):
@@ -76,15 +69,18 @@ def fast_map_genres(genres):
 
 def process_genres(album, metadata, track, release):
     album_filenames = album.tagger.get_files_from_objects([album])
-    log.warning(album_filenames)
-
-    return
 
     genres = metadata.getall("genre")
     album_artist = metadata.get("albumartist", "")
     track_title = metadata.get("title", "")
 
     fast_genres = fast_map_genres(genres)
+
+    # Skip tracks which don't exist in local files
+    track_in_files = any(track_title.lower() in str(filename).lower() for filename in album_filenames)
+    if not track_in_files:
+        log.debug(f"<{track_title}> not found in {album_filenames} - skipping")
+        return
 
     if len(fast_genres) < 3:
         key = (album_artist, track_title)
@@ -94,10 +90,11 @@ def process_genres(album, metadata, track, release):
             extra = LASTFM_CACHE[key]
             fast_genres = fast_map_genres(fast_genres + extra)
             _finalize_genres(metadata, fast_genres, genres + extra)
+            return
         else:
             # Kick off async request, hold finalization open
             album._requests += 1
-            _finalize_genres(metadata, fast_genres, genres)  # write what we have now
+            _finalize_genres(metadata, fast_genres, genres)
 
             def handle_response(response, reply, error):
                 try:
@@ -151,7 +148,7 @@ def _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres):
                 extra = [t["name"] for t in tags]
                 LASTFM_CACHE[key] = extra
                 enriched = fast_map_genres(fast_genres + extra)
-                _finalize_genres(metadata, enriched, genres)
+                _finalize_genres(metadata, enriched, genres + extra)
         except Exception as e:
             log.debug(f"Last.fm artist response error: {e}")
         finally:
@@ -177,7 +174,8 @@ def _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres):
 def _finalize_genres(metadata, fast_genres, original_genres):
     final = []
     for g in fast_genres:
-        if g not in FILTER_LIST and g not in final:
+        filter_matched = any(regex.search(g) for regex in FILTER_LIST)
+        if not filter_matched and g not in final:
             final.append(g)
     metadata["genre"] = final
     metadata["genre_o"] = original_genres
