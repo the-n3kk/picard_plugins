@@ -14,7 +14,7 @@ PLUGIN_DESCRIPTION = """
 Maps local genres using regex rules to
 fix up genre tags from my collection to suit my personal taste.
 """
-PLUGIN_VERSION = "0.9.0"
+PLUGIN_VERSION = "0.9.4"
 PLUGIN_API_VERSIONS = ["2.0"]
 LASTFM_API_KEY = "98654a91f7e96b224e736286f6b87d03"
 
@@ -103,7 +103,7 @@ def process_genres(album, metadata, track, release):
                 try:
                     if not error:
                         tags = response.get("toptags", {}).get("tag", [])
-                        tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:4]
+                        tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:3]
                         extra = [t["name"] for t in tags]
 
                         if not extra:
@@ -149,7 +149,7 @@ def _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres):
         try:
             if not error:
                 tags = response.get("toptags", {}).get("tag", [])
-                tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:4]
+                tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:3]
                 extra = [t["name"] for t in tags]
                 LASTFM_CACHE[key] = extra
                 enriched = fast_map_genres(fast_genres + extra)
