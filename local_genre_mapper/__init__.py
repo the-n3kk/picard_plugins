@@ -14,7 +14,7 @@ PLUGIN_DESCRIPTION = """
 Maps local genres using regex rules to
 fix up genre tags from my collection to suit my personal taste.
 """
-PLUGIN_VERSION = "0.9.4"
+PLUGIN_VERSION = "0.10.0"
 PLUGIN_API_VERSIONS = ["2.0"]
 LASTFM_API_KEY = "98654a91f7e96b224e736286f6b87d03"
 
@@ -46,27 +46,67 @@ with open(path, "r", encoding="utf-8") as f:
 FILTER_LIST = [re.compile(p, re.IGNORECASE) for p in patterns]
 
 
-def fast_map_genres(genres):
+def flatten_list(genres):
+    flat_list = []
+    for genre in genres:
+        flat_list += [g.strip().lower() for g in GENRE_SPLIT_PATTERN.split(genre) if g.strip()]
+
+    return list(set(flat_list))
+
+
+def fast_map_genres(genres, g_prefix):
     new_genres = []
 
     if not genres:
         return []
 
-    for genre in genres:
-        parts = [g.strip().lower() for g in GENRE_SPLIT_PATTERN.split(genre) if g.strip()]
+    flat_list = flatten_list(genres)
 
-        for part in parts:
-            mapped = part
+    for genre in flat_list:
+        if any(regex.search(genre) for regex in FILTER_LIST):
+            continue
+        mapped = genre
 
-            for regex, replacement in COMPILED_MAP:
-                if regex.search(part):
-                    mapped = replacement
-                    break
+        for regex, replacement in COMPILED_MAP:
+            if regex.search(mapped):
+                mapped = replacement
+                break
 
-            if mapped not in new_genres:
-                new_genres.append(mapped.lower())
+        log.warning(mapped)
+        split_mapped = GENRE_SPLIT_PATTERN.split(mapped)
+        log.warning(split_mapped)
+        for split_genre in split_mapped:
+            if g_prefix is not None:
+                if split_genre.lower() == "rock":
+                    split_genre = f"{g_prefix} rock"
 
+                if split_genre.lower() == "pop":
+                    split_genre = f"{g_prefix} pop"
+
+            log.warning(split_genre)
+            if split_genre not in new_genres:
+                new_genres.append(split_genre.lower())
+
+    log.warning(new_genres)
     return new_genres
+
+
+def genre_prefix(metadata):
+    language = metadata.get("~releaselanguage")
+    if language == "jpn":
+        return "j"
+
+    language = metadata.get("language")
+    if language == "jpn":
+        return "j"
+
+    script = metadata.get("script")
+    if script == "Jpan":
+        return "j"
+    if script == "Kore":
+        return "k"
+
+    return None
 
 
 def process_genres(album, metadata, track, release):
@@ -75,8 +115,9 @@ def process_genres(album, metadata, track, release):
     genres = metadata.getall("genre")
     album_artist = metadata.get("albumartist", "")
     track_title = metadata.get("title", "")
+    g_prefix = genre_prefix(metadata)
 
-    fast_genres = fast_map_genres(genres)
+    fast_genres = fast_map_genres(genres, g_prefix)
 
     # Skip tracks which don't exist in local files
     normalized_name = re.sub(r'[\*;<>"|?]_', '_', track_title.lower())
@@ -92,7 +133,7 @@ def process_genres(album, metadata, track, release):
         if key in LASTFM_CACHE:
             # Already cached — use immediately
             extra = LASTFM_CACHE[key]
-            fast_genres = fast_map_genres(fast_genres + extra)
+            fast_genres = fast_map_genres(fast_genres + extra, g_prefix)
             _finalize_genres(metadata, fast_genres, genres + extra)
             return
         else:
@@ -108,11 +149,11 @@ def process_genres(album, metadata, track, release):
 
                         if not extra:
                             # Fall back to artist tags
-                            _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres)
+                            _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres, g_prefix)
                             return
 
                         LASTFM_CACHE[key] = extra
-                        enriched = fast_map_genres(fast_genres + extra)
+                        enriched = fast_map_genres(fast_genres + extra, g_prefix)
                         _finalize_genres(metadata, enriched, genres + extra)
                 except Exception as e:
                     log.debug(f"Last.fm response error: {e}")
@@ -141,7 +182,7 @@ def process_genres(album, metadata, track, release):
     _finalize_genres(metadata, fast_genres, genres)
 
 
-def _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres):
+def _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres, g_prefix):
     key = ("artist", album_artist)
     album._requests += 1
 
@@ -152,7 +193,7 @@ def _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres):
                 tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:3]
                 extra = [t["name"] for t in tags]
                 LASTFM_CACHE[key] = extra
-                enriched = fast_map_genres(fast_genres + extra)
+                enriched = fast_map_genres(fast_genres + extra, g_prefix)
                 _finalize_genres(metadata, enriched, genres + extra)
         except Exception as e:
             log.debug(f"Last.fm artist response error: {e}")
@@ -177,11 +218,14 @@ def _fetch_artist_tags(album, metadata, album_artist, genres, fast_genres):
 
 
 def _finalize_genres(metadata, fast_genres, original_genres):
+    deduped = list(set(fast_genres))
     final = []
-    for g in fast_genres:
-        filter_matched = any(regex.search(g) for regex in FILTER_LIST)
-        if not filter_matched and g not in final:
-            final.append(g)
+    for genre in deduped:
+        pattern = re.compile(rf'\b{re.escape(genre)}\b$', re.IGNORECASE)
+        if not any(item for item in deduped if pattern.search(item) and item != genre):
+            final.append(genre)
+
+    final.sort()
     metadata["genre"] = final
     metadata["genre_o"] = original_genres
 
