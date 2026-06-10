@@ -1,11 +1,12 @@
 #!/usr/bin/python
 
+import unicodedata
 import re
+from picard.file import register_file_post_load_processor
 from picard.metadata import register_track_metadata_processor
 from picard import log
 import json
 from pathlib import Path
-from picard.webservice import ratecontrol
 
 PLUGIN_NAME = "Local Genre Mapper"
 PLUGIN_AUTHOR = "JamN3k"
@@ -13,20 +14,15 @@ PLUGIN_DESCRIPTION = """
 Maps local genres using regex rules to
 fix up genre tags from my collection to suit my personal taste.
 """
-PLUGIN_VERSION = "0.10.0"
+PLUGIN_VERSION = "0.12.0"
 PLUGIN_API_VERSIONS = ["2.0"]
 LASTFM_API_KEY = "98654a91f7e96b224e736286f6b87d03"
-
+DISCOGS_TOKEN = "pprxQQlOmJloOlUiZKgqNyOvoUnwOoZDQQVEWRKZ"
 GENRE_SPLIT_PATTERN = re.compile(r"[\/;,]")
 
-WIKIDATA_HOST = 'www.wikidata.org'
-WIKIDATA_PORT = 443
-
-ratecontrol.set_minimum_delay((WIKIDATA_HOST, WIKIDATA_PORT), 0)
-
-WIKIDATA_CACHE = {}
-LASTFM_CACHE = {}
-
+DISCOGS_CACHE_KEY = "discorgs_track"
+LASTFM_TRACK_CACHE_KEY = "lastfm_track"
+LASTFM_ARTIST_CACHE_KEY = "lastfm_artist"
 
 # load resources
 path = f'{Path(__file__).parent}/genre_map.json'
@@ -46,6 +42,9 @@ FILTER_LIST = [re.compile(p, re.IGNORECASE) for p in patterns]
 
 
 def flatten_list(genres):
+    if isinstance(genres, str):
+        genres = [genres]
+
     flat_list = []
     for genre in genres:
         flat_list += [g.strip().lower() for g in GENRE_SPLIT_PATTERN.split(genre) if g.strip()]
@@ -53,17 +52,28 @@ def flatten_list(genres):
     return list(set(flat_list))
 
 
+def normalize_name(s):
+    s = re.sub(r'[\*;<>"|?]_', '_', s.lower())
+    s = unicodedata.normalize("NFKC", s)
+    return s.lower()
+
+
 def fast_map_genres(genres, g_prefix):
     new_genres = []
+
+    # log.debug(f"Mapping: {genres}")
 
     if not genres:
         return []
 
     flat_list = flatten_list(genres)
-
+    # log.warning(f"filters: {FILTER_LIST}")
     for genre in flat_list:
+        # log.warning(f"genre {genre}")
         if any(regex.search(genre) for regex in FILTER_LIST):
+            # log.warning(f"filter match {genre}")
             continue
+        # log.warning(f"going with {genre}")
         mapped = genre
 
         for regex, replacement in COMPILED_MAP:
@@ -82,6 +92,8 @@ def fast_map_genres(genres, g_prefix):
 
             if split_genre not in new_genres:
                 new_genres.append(split_genre.lower())
+
+    # log.info(f"Mapped to: {new_genres}")
 
     return new_genres
 
@@ -105,43 +117,61 @@ def get_genre_prefix(metadata):
 
 
 def process_genres(album, metadata, track, release):
-    album_filenames = album.tagger.get_files_from_objects([album])
-
-    genres = metadata.getall("genre")
-    album_artist = metadata.get("albumartist", "")
+    album_files = album.tagger.get_files_from_objects([album])
     track_title = metadata.get("title", "")
     g_prefix = get_genre_prefix(metadata)
 
+    discogs_cache = []
+    lastfm_artist_cache = []
+    lastfm_track_cache = []
+
+    file = next((file for file in album_files if file.metadata.get("title") == track_title), None)
+    if file is not None:
+        discogs_cache = fast_map_genres(file.metadata.get(DISCOGS_CACHE_KEY) or [], g_prefix)
+        lastfm_artist_cache = fast_map_genres(file.metadata.get(LASTFM_ARTIST_CACHE_KEY) or [], g_prefix)
+        lastfm_track_cache = fast_map_genres(file.metadata.get(LASTFM_TRACK_CACHE_KEY) or [], g_prefix)
+
+    genres = metadata.getall("genre")
+    manual_genres = metadata.getall("m_genre")
+    log.warning(f"manual: {manual_genres}")
+    genres = genres + manual_genres
+    album_artist = metadata.get("albumartist", "")
+
     fast_genres = fast_map_genres(genres, g_prefix)
 
-    # Skip tracks which don't exist in local files
-    normalized_name = re.sub(r'[\*;<>"|?]_', '_', track_title.lower())
-    if not any(normalized_name in str(filename).lower() for filename in album_filenames):
+    if file is None:
         _finalize_genres(metadata, fast_genres)
-        log.debug(f"og genres: {genres}")
-        log.debug(f"<{track_title}> not found in {album_filenames} - skipping")
+        # log.debug(f"<{track_title}> not found in {album_filenames} - skipping")
         return
 
     # we have less than 3 genres, we should add more
-    if len(fast_genres) < 3:
-        _fetch_track_tags(album, metadata, album_artist, track_title, genres, fast_genres, g_prefix)
+    if len(fast_genres) < 4:
+        # log.info(f"Insufficient tags: {fast_genres}")
+        _fetch_lastfm_track_tags(album, metadata, album_artist, track_title,
+                                 fast_genres, g_prefix, lastfm_artist_cache,
+                                 discogs_cache, lastfm_track_cache)
         return
 
-    # there's 3+ genres
+    # log.info(f"Sufficient tags: {fast_genres}")
     _finalize_genres(metadata, fast_genres)
-    log.debug(f"og genres: {genres}")
+    # log.debug(f"og genres: {genres}")
 
 
-def _fetch_track_tags(album, metadata, album_artist,
-                      track_title, genres, fast_genres, g_prefix):
-    key = (album_artist, track_title)
+def _fetch_lastfm_track_tags(album, metadata, album_artist, track_title,
+                             fast_genres, g_prefix, lastfm_artist_cache,
+                             discogs_cache, lastfm_track_cache):
+    log.debug(f"[LASTFM_T] Got cache: {lastfm_track_cache}")
 
-    if key in LASTFM_CACHE:
-        # Already cached — use immediately
-        extra = LASTFM_CACHE[key]
+    if any(lastfm_track_cache):
+        extra = lastfm_track_cache
         fast_genres = fast_map_genres(fast_genres + extra, g_prefix)
+        if len(fast_genres) < 4:
+            _fetch_discogs_tags(album, metadata, album_artist, track_title,
+                                fast_genres, g_prefix, lastfm_artist_cache,
+                                discogs_cache)
+            return
+
         _finalize_genres(metadata, fast_genres)
-        log.debug(f"og genres: {genres+extra}")
         return
     else:
         # Kick off async request, hold finalization open
@@ -154,17 +184,19 @@ def _fetch_track_tags(album, metadata, album_artist,
                     tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:3]
                     extra = [t["name"] for t in tags]
 
-                    if not extra:
-                        # Fall back to artist tags
-                        log.warning(f"No track tags on last.fm for {album_artist} - {track_title}")
-                        _fetch_artist_tags(album, metadata, album_artist,
-                                           genres, fast_genres, g_prefix)
+                    log.debug(f"[LASTFM_T] Got new: {extra}")
+                    metadata[LASTFM_TRACK_CACHE_KEY] = extra
+                    # log.info(f"Track tags for  {album_artist} - {track_title}: {extra}")
+                    log.debug(f"[LASTFM_T] Got old: {fast_genres}")
+
+                    enriched = fast_map_genres(fast_genres + extra, g_prefix)
+                    if len(fast_genres) < 4:
+                        _fetch_discogs_tags(album, metadata, album_artist,
+                                            track_title, enriched, g_prefix,
+                                            lastfm_artist_cache, discogs_cache)
                         return
 
-                    LASTFM_CACHE[key] = extra
-                    enriched = fast_map_genres(fast_genres + extra, g_prefix)
                     _finalize_genres(metadata, enriched)
-                    log.debug(f"og genres: {genres+extra}")
             except Exception as e:
                 log.debug(f"Last.fm response error: {e}")
             finally:
@@ -188,47 +220,119 @@ def _fetch_track_tags(album, metadata, album_artist,
         )
 
 
-def _fetch_artist_tags(album, metadata, album_artist,
-                       genres, fast_genres, g_prefix):
-    key = ("artist", album_artist)
-    album._requests += 1
+def _fetch_discogs_tags(album, metadata, album_artist, track_title,
+                        fast_genres, g_prefix, lastfm_artist_cache,
+                        discogs_cache):
+    log.debug(f"[DISCORGS] Got cache: {discogs_cache}")
 
-    def handle_artist_response(response, reply, error):
-        try:
-            if not error:
-                tags = response.get("toptags", {}).get("tag", [])
-                log.warning(f"Artist tags: {tags}")
-                tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:3]
-                extra = [t["name"] for t in tags]
-                if not extra:
-                    log.warning(f"No artist tags on last.fm for {album_artist}")
-                LASTFM_CACHE[key] = extra
-                enriched = fast_map_genres(fast_genres + extra, g_prefix)
-                _finalize_genres(metadata, enriched)
-                log.debug(f"og genres: {genres+extra}")
-        except Exception as e:
-            log.debug(f"Last.fm artist response error: {e}")
-        finally:
-            album._requests -= 1
-            if not album._requests:
-                album._finalize_loading(None)
+    if any(discogs_cache):
+        extra = discogs_cache
+        fast_genres = fast_map_genres(fast_genres + extra, g_prefix)
+        if len(fast_genres) < 4:
+            _fetch_lastfm_artist_tags(album, metadata, album_artist,
+                                      track_title, fast_genres, g_prefix,
+                                      lastfm_artist_cache)
+            return
 
-    album.tagger.webservice.get_url(
-        url="https://ws.audioscrobbler.com/2.0/",
-        handler=handle_artist_response,
-        parse_response_type="json",
-        priority=False,
-        important=False,
-        queryargs={
-            "method": "artist.getTopTags",
-            "artist": album_artist,
-            "api_key": LASTFM_API_KEY,
-            "format": "json",
-        }
-    )
+        _finalize_genres(metadata, fast_genres)
+        return
+    else:
+        album._requests += 1
+
+        def handle_response(response, reply, error):
+            try:
+                if not error:
+                    results = response.get("results", [])
+                    if not results:
+                        log.warning("No Discogs matches")
+                        extra = []
+                    else:
+                        item = results[0]
+
+                        extra = (item.get("genre", []) or []) + (item.get("style", []) or [])
+                        metadata[DISCOGS_CACHE_KEY] = extra
+
+                    enriched = fast_map_genres(fast_genres + extra, g_prefix)
+                    if len(enriched) < 4:
+                        _fetch_lastfm_artist_tags(album, metadata,
+                                                  album_artist, track_title,
+                                                  enriched, g_prefix,
+                                                  lastfm_artist_cache)
+                        return
+
+                    _finalize_genres(metadata, enriched)
+            except Exception as e:
+                log.debug(f"Discogs response error: {e}")
+            finally:
+                album._requests -= 1
+                if not album._requests:
+                    album._finalize_loading(None)
+
+        album.tagger.webservice.get_url(
+            url="https://api.discogs.com/database/search",
+            handler=handle_response,
+            parse_response_type="json",
+            priority=False,
+            important=False,
+            queryargs={
+                "artist": album_artist,
+                "track": track_title,
+                "type": "release",
+                "token": DISCOGS_TOKEN,
+            }
+        )
+
+
+def _fetch_lastfm_artist_tags(album, metadata, album_artist, track_title,
+                              fast_genres, g_prefix, lastfm_artist_cache):
+    log.debug(f"[LASTFM_A] Got cache: {lastfm_artist_cache}")
+
+    if any(lastfm_artist_cache):
+        # Already cached — use immediately
+        extra = lastfm_artist_cache
+        fast_genres = fast_map_genres(fast_genres + extra, g_prefix)
+        _finalize_genres(metadata, fast_genres)
+        return
+    else:
+        album._requests += 1
+
+        def handle_artist_response(response, reply, error):
+            try:
+                if not error:
+                    tags = response.get("toptags", {}).get("tag", [])
+                    # log.warning(f"Artist tags: {tags}")
+                    tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:3]
+                    extra = [t["name"] for t in tags]
+                    metadata[LASTFM_ARTIST_CACHE_KEY] = extra
+                    # log.info(f"Artist tags for  {album_artist}: {extra}")
+                    if not extra:
+                        log.warning(f"No artist tags on last.fm for {album_artist}")
+                    enriched = fast_map_genres(fast_genres + extra, g_prefix)
+                    _finalize_genres(metadata, enriched)
+            except Exception as e:
+                log.debug(f"Last.fm artist response error: {e}")
+            finally:
+                album._requests -= 1
+                if not album._requests:
+                    album._finalize_loading(None)
+
+        album.tagger.webservice.get_url(
+            url="https://ws.audioscrobbler.com/2.0/",
+            handler=handle_artist_response,
+            parse_response_type="json",
+            priority=False,
+            important=False,
+            queryargs={
+                "method": "artist.getTopTags",
+                "artist": album_artist,
+                "api_key": LASTFM_API_KEY,
+                "format": "json",
+            }
+        )
 
 
 def _finalize_genres(metadata, genres):
+    log.debug(f"Final: {genres}")
     deduped = list(set(genres))
     final = []
     for genre in deduped:
@@ -237,6 +341,10 @@ def _finalize_genres(metadata, genres):
             final.append(genre)
 
     final.sort()
+    if len(final) == 0:
+        del metadata["genre"]
+        return
+
     metadata["genre"] = final
 
 
