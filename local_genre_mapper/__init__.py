@@ -2,7 +2,6 @@
 
 import unicodedata
 import re
-from picard.file import register_file_post_load_processor
 from picard.metadata import register_track_metadata_processor
 from picard import log
 import json
@@ -14,7 +13,7 @@ PLUGIN_DESCRIPTION = """
 Maps local genres using regex rules to
 fix up genre tags from my collection to suit my personal taste.
 """
-PLUGIN_VERSION = "0.12.0"
+PLUGIN_VERSION = "0.12.2"
 PLUGIN_API_VERSIONS = ["2.0"]
 LASTFM_API_KEY = "98654a91f7e96b224e736286f6b87d03"
 DISCOGS_TOKEN = "pprxQQlOmJloOlUiZKgqNyOvoUnwOoZDQQVEWRKZ"
@@ -124,15 +123,16 @@ def process_genres(album, metadata, track, release):
     discogs_cache = []
     lastfm_artist_cache = []
     lastfm_track_cache = []
+    manual_genres = []
 
     file = next((file for file in album_files if file.metadata.get("title") == track_title), None)
     if file is not None:
         discogs_cache = fast_map_genres(file.metadata.get(DISCOGS_CACHE_KEY) or [], g_prefix)
         lastfm_artist_cache = fast_map_genres(file.metadata.get(LASTFM_ARTIST_CACHE_KEY) or [], g_prefix)
         lastfm_track_cache = fast_map_genres(file.metadata.get(LASTFM_TRACK_CACHE_KEY) or [], g_prefix)
+        manual_genres = fast_map_genres(file.metadata.get("m_genre") or [], g_prefix)
 
     genres = metadata.getall("genre")
-    manual_genres = metadata.getall("m_genre")
     log.warning(f"manual: {manual_genres}")
     genres = genres + manual_genres
     album_artist = metadata.get("albumartist", "")

@@ -1,4 +1,6 @@
 [
+    ["donk", "house"],
+    ["vocaloid", "vocaloid"],
     [".*vocal.*", "vocalist"],
     ["gangsta", "hip hop"],
     ["boom bap", "hip hop"],
@@ -12,6 +14,7 @@
     [".*東方.*", "doujin"],
     ["touhou", "doujin"],
 
+    [".*\\bcover\\b.*", "cover"],
     ["covers", "cover"],
     ["\\bUtaite\\b", "Cover"],
 
@@ -31,6 +34,7 @@
     ["Soul and Reggae", "Soul/Reggae"],
     ["hard.*heavy","rock"],
     ["^Aor", "Rock"],
+    ["rock music", "rock"],
     ["neo prog", "progressive rock"],
     ["neo psychedelia", "acid rock"],
     ["dream pop", "pop"],
@@ -67,7 +71,7 @@
     ["Thrash.*", "Thrash Metal"],
     [".*Folk Metal", "Folk Metal"],
 
-    [".*honic Rock", "Symphonic Metal"],
+    [".*honic Rock", "Symphonic Rock"],
     [".*honic", "Symphonic Metal"],
 
     [".*Instrumental.*", "Instrumental"],
@@ -93,10 +97,6 @@
     ["^OST$", "Soundtrack"],
     [".*Theme.*", "Soundtrack"],
 
-    ["tsunomaki watame", "VTuber"],
-    ["Hololive", "VTuber"],
-    [".*Vtuber.*", "VTuber"],
-    [".*Virtual Youtuber.*", "VTuber"],
 
     [".*Japanese Teen Pop.*", "Idol Pop"],
     [".*idol.*", "Idol Pop"],
