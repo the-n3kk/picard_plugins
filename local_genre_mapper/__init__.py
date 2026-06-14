@@ -140,13 +140,13 @@ def contains_non_latin(text):
 def preprocess_track(track, release, metadata):
     if contains_non_latin(metadata.get("title")):
         track_alias = get_alias(track["recording"])
-        log.info(f"[PREPROCESS] {metadata.get("title")} -> {track_alias}")
+        log.info(f"[PREPROCESS] {metadata.get("title")} -> {track_alias["name"]}")
         if track_alias is not None:
             metadata["title"] = track_alias["name"]
 
     if contains_non_latin(metadata.get("album")):
         album_alias = get_alias(release)
-        log.info(f"[PREPROCESS] {metadata.get("album")} -> {album_alias}")
+        log.info(f"[PREPROCESS] {metadata.get("album")} -> {album_alias["name"]}")
         if album_alias is not None:
             metadata["album"] = album_alias["name"]
 
@@ -176,10 +176,14 @@ def preprocess_track(track, release, metadata):
             artists = artists.replace(og_name, new_name)
             artists_so = artists_so.replace(og_name_so, new_name_so)
 
-    metadata["albumartist"] = album_artist
-    metadata["albumartistsort"] = album_artist_so
-    metadata["artists"] = artists.split(";")
-    metadata["artistsort"] = artists_so
+    if metadata.get("albumartist") != album_artist:
+        metadata["albumartist"] = album_artist
+    if metadata.get("albumartistsort") != album_artist_so:
+        metadata["albumartistsort"] = album_artist_so
+    if metadata.get("artists") != album_artist:
+        metadata["artists"] = artists.split(";")
+    if metadata.get("artistsort") != artists_so:
+        metadata["artistsort"] = artists_so
 
 
 def process_genres(album, metadata, track, release):
