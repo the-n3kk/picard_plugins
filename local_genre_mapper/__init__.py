@@ -183,7 +183,6 @@ def preprocess_track(track, release, metadata):
 
 
 def process_genres(album, metadata, track, release):
-
     album_files = album.tagger.get_files_from_objects([album])
     track_title = metadata.get("title", "")
     g_prefix = get_genre_prefix(metadata)
@@ -211,8 +210,7 @@ def process_genres(album, metadata, track, release):
     # we have less than 3 genres, we should add more
     if len(fast_genres) < 4:
         # log.info(f"Insufficient tags: {fast_genres}")
-        _fetch_lastfm_track_tags(album, metadata, album_artist, track_title,
-                                 fast_genres, g_prefix)
+        _fetch_lastfm_track_tags(album, metadata, album_artist, track_title, fast_genres, g_prefix)
         return
 
     # log.info(f"Sufficient tags: {fast_genres}")
@@ -220,9 +218,7 @@ def process_genres(album, metadata, track, release):
     # log.info(f"og genres: {genres}")
 
 
-def _fetch_lastfm_track_tags(album, metadata, album_artist, track_title,
-                             fast_genres, g_prefix):
-
+def _fetch_lastfm_track_tags(album, metadata, album_artist, track_title, fast_genres, g_prefix):
     lastfm_track_cache = metadata.getall(LASTFM_TRACK_CACHE_KEY) or []
     log.info(f"[LASTFM_T] Got cache: {lastfm_track_cache}")
 
@@ -244,24 +240,21 @@ def _fetch_lastfm_track_tags(album, metadata, album_artist, track_title,
             try:
                 if not error:
                     tags = response.get("toptags", {}).get("tag", [])
+                    enriched = fast_genres
+                    log.info(f"[LASTFM_T] Got: {enriched}")
                     if any(tags):
                         tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:3]
                         extra = [t["name"] for t in tags]
-
-                        log.info(f"[LASTFM_T] Got new: {extra}")
                         metadata[LASTFM_TRACK_CACHE_KEY] = extra
-                        # log.info(f"Track tags for  {album_artist} - {track_title}: {extra}")
-                        log.info(f"[LASTFM_T] Got old: {fast_genres}")
-
                         enriched = fast_map_genres(fast_genres + extra, g_prefix)
-                        if len(fast_genres) < 4:
-                            _fetch_discogs_tags(album, metadata, album_artist,
-                                                track_title, enriched, g_prefix)
-                            return
 
-                        _finalize_genres(metadata, enriched)
+                    if len(enriched) < 4:
+                        _fetch_discogs_tags(album, metadata, album_artist, track_title, enriched, g_prefix)
+                        return
+
+                    _finalize_genres(metadata, enriched)
             except Exception as e:
-                log.error(f"Last.fm response error: {e}")
+                log.error(f"[LASTFM_T] Last.fm response error: {e}")
             finally:
                 album._requests -= 1
                 if not album._requests:
@@ -283,9 +276,7 @@ def _fetch_lastfm_track_tags(album, metadata, album_artist, track_title,
         )
 
 
-def _fetch_discogs_tags(album, metadata, album_artist, track_title,
-                        fast_genres, g_prefix):
-
+def _fetch_discogs_tags(album, metadata, album_artist, track_title, fast_genres, g_prefix):
     discogs_cache = metadata.getall(DISCOGS_CACHE_KEY) or []
     log.info(f"[DISCORGS] Got cache: {discogs_cache}")
 
@@ -305,22 +296,23 @@ def _fetch_discogs_tags(album, metadata, album_artist, track_title,
             try:
                 if not error:
                     results = response.get("results", [])
+                    enriched = fast_genres
+                    log.info(f"[DISCORGS] Got: {enriched}")
                     if not results:
-                        log.warning("No Discogs matches")
+                        log.warning("[DISCORGS] No Discogs matches")
                     else:
                         item = results[0]
-
                         extra = (item.get("genre", []) or []) + (item.get("style", []) or [])
                         metadata[DISCOGS_CACHE_KEY] = extra
                         enriched = fast_map_genres(fast_genres + extra, g_prefix)
-                        if len(enriched) < 4:
-                            _fetch_lastfm_artist_tags(album, metadata,
-                                                      album_artist, track_title,
-                                                      enriched, g_prefix)
-                            return
-                        _finalize_genres(metadata, enriched)
+
+                    if len(enriched) < 4:
+                        _fetch_lastfm_artist_tags(album, metadata, album_artist, track_title, enriched, g_prefix)
+                        return
+
+                    _finalize_genres(metadata, enriched)
             except Exception as e:
-                log.error(f"Discogs response error: {e}")
+                log.error(f"[DISCORGS]  Discogs response error: {e}")
             finally:
                 album._requests -= 1
                 if not album._requests:
@@ -360,6 +352,7 @@ def _fetch_lastfm_artist_tags(album, metadata, album_artist, track_title,
             try:
                 if not error:
                     tags = response.get("toptags", {}).get("tag", [])
+                    enriched = fast_genres
                     if any(tags):
                         # log.warning(f"Artist tags: {tags}")
                         tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:3]
@@ -369,9 +362,10 @@ def _fetch_lastfm_artist_tags(album, metadata, album_artist, track_title,
                         if not extra:
                             log.warning(f"No artist tags on last.fm for {album_artist}")
                         enriched = fast_map_genres(fast_genres + extra, g_prefix)
-                        _finalize_genres(metadata, enriched)
+                        log.info(f"[LASTFM_A] Got: {enriched}")
+                    _finalize_genres(metadata, enriched)
             except Exception as e:
-                log.error(f"Last.fm artist response error: {e}")
+                log.error(f"[LASTFM_A] Last.fm artist response error: {e}")
             finally:
                 album._requests -= 1
                 if not album._requests:
@@ -420,7 +414,6 @@ def _finalize_genres(metadata, genres):
 
     log.info(f"[FINAL] Saving: {final}")
     metadata["genre"] = final
-    metadata["testing"] = "xyz"
 
 
 register_track_metadata_processor(process_genres, priority=9999)
