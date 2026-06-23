@@ -1,4 +1,5 @@
 [
+    ["cevio", "vocaloid"],
     ["donk", "house"],
     ["vocaloid", "vocaloid"],
     [".*vocal.*", "vocalist"],
@@ -44,8 +45,8 @@
     ["filthstep", "dubstep"],
     ["footwork", "dance"],
     ["^.*\\bbop$", "jazz"],
-    ["post grunge", "grunge"],
-    ["post punk", "punk"],
+    ["post.grunge", "grunge"],
+    ["post.punk", "punk"],
     ["^fusion$", "jazz"],
     ["swingbeat", "DnB"],
     ["Drumstep", "DnB"],

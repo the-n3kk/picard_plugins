@@ -13,11 +13,13 @@ PLUGIN_DESCRIPTION = """
 Maps local genres using regex rules to
 fix up genre tags from my collection to suit my personal taste.
 """
-PLUGIN_VERSION = "0.12.2"
+PLUGIN_VERSION = "0.15.2"
 PLUGIN_API_VERSIONS = ["2.0"]
 LASTFM_API_KEY = "98654a91f7e96b224e736286f6b87d03"
 DISCOGS_TOKEN = "pprxQQlOmJloOlUiZKgqNyOvoUnwOoZDQQVEWRKZ"
 GENRE_SPLIT_PATTERN = re.compile(r"[\/;,]")
+
+IGNORE_CACHE = True
 
 DISCOGS_CACHE_KEY = "discorgs_track"
 LASTFM_TRACK_CACHE_KEY = "lastfm_track"
@@ -38,7 +40,7 @@ path = Path(__file__).parent / "filter_list.json"
 with open(path, "r", encoding="utf-8") as f:
     patterns = json.load(f)
 
-FILTER_LIST = [re.compile(p, re.IGNORECASE) for p in patterns]
+FILTER_LIST = [re.compile(f"^{p}$", re.IGNORECASE) for p in patterns]
 
 
 def flatten_list(genres):
@@ -54,8 +56,20 @@ def flatten_list(genres):
 
 def normalize_name(s):
     s = re.sub(r'[\*;<>"|?]_', '_', s.lower())
-    s = unicodedata.normalize("NFKC", s)
-    return s.lower()
+    return unicodedata.normalize("NFKC", s).casefold()
+
+
+def compare_with_contains(string1, string2):
+    s1 = normalize_name(string1)
+    s2 = normalize_name(string2)
+    log.warning(f"{s1} vs {s2}")
+    if s1 == s2:
+        return True
+    if s1 in s2:
+        return True
+    if s2 in s1:
+        return True
+    return False
 
 
 def fast_map_genres(genres, g_prefix):
@@ -96,7 +110,7 @@ def fast_map_genres(genres, g_prefix):
     # log.info(f"Mapped to: {new_genres}")
 
     new_genres.sort()
-    return new_genres
+    return list(set(new_genres))
 
 
 def get_genre_prefix(metadata):
@@ -138,17 +152,20 @@ def contains_non_latin(text):
 
 
 def preprocess_track(track, release, metadata):
-    if contains_non_latin(metadata.get("title")):
-        track_alias = get_alias(track["recording"])
-        log.info(f"[PREPROCESS] {metadata.get("title")} -> {track_alias["name"]}")
-        if track_alias is not None:
-            metadata["title"] = track_alias["name"]
-
     if contains_non_latin(metadata.get("album")):
         album_alias = get_alias(release)
-        log.info(f"[PREPROCESS] {metadata.get("album")} -> {album_alias["name"]}")
         if album_alias is not None:
+            log.info(f"[PREPROCESS] {metadata.get("album")} -> {album_alias["name"]}")
             metadata["album"] = album_alias["name"]
+
+    if "recording" not in track:
+        return
+
+    if contains_non_latin(metadata.get("title")):
+        track_alias = get_alias(track["recording"])
+        if track_alias is not None:
+            log.info(f"[PREPROCESS] {metadata.get("title")} -> {track_alias["name"]}")
+            metadata["title"] = track_alias["name"]
 
     album_artist = metadata.get("albumartist")
     album_artist_so = metadata.get("albumartistsort")
@@ -188,14 +205,18 @@ def preprocess_track(track, release, metadata):
 
 def process_genres(album, metadata, track, release):
     album_files = album.tagger.get_files_from_objects([album])
-    track_title = metadata.get("title", "")
     g_prefix = get_genre_prefix(metadata)
 
-    file = next((file for file in album_files if file.metadata.get("title") == track_title), None)
+    file = next((file for file in album_files if compare_with_contains(file.metadata.get("title"), metadata.get("title", ""))), None)
+    if file is None:
+        preprocess_track(track, release, metadata)
+        file = next((file for file in album_files if compare_with_contains(file.metadata.get("title"), metadata.get("title", ""))), None)
+
     if file is not None:
-        metadata[DISCOGS_CACHE_KEY] = fast_map_genres(file.metadata.get(DISCOGS_CACHE_KEY) or [], g_prefix)
-        metadata[LASTFM_ARTIST_CACHE_KEY] = fast_map_genres(file.metadata.get(LASTFM_ARTIST_CACHE_KEY) or [], g_prefix)
-        metadata[LASTFM_TRACK_CACHE_KEY] = fast_map_genres(file.metadata.get(LASTFM_TRACK_CACHE_KEY) or [], g_prefix)
+        if not IGNORE_CACHE:
+            metadata[DISCOGS_CACHE_KEY] = file.metadata.get(DISCOGS_CACHE_KEY) or []
+            metadata[LASTFM_ARTIST_CACHE_KEY] = file.metadata.get(LASTFM_ARTIST_CACHE_KEY) or []
+            metadata[LASTFM_TRACK_CACHE_KEY] = file.metadata.get(LASTFM_TRACK_CACHE_KEY) or []
         metadata[MANUAL_GENRES_KEY] = flatten_list(file.metadata.getall(MANUAL_GENRES_KEY) or [])
         preprocess_track(track, release, metadata)
 
@@ -212,7 +233,7 @@ def process_genres(album, metadata, track, release):
         return
 
     # we have less than 3 genres, we should add more
-    if len(fast_genres) < 4:
+    if len(fast_genres) < 3:
         # log.info(f"Insufficient tags: {fast_genres}")
         _fetch_lastfm_track_tags(album, metadata, album_artist, track_title, fast_genres, g_prefix)
         return
@@ -229,7 +250,7 @@ def _fetch_lastfm_track_tags(album, metadata, album_artist, track_title, fast_ge
     if any(lastfm_track_cache):
         extra = lastfm_track_cache
         fast_genres = fast_map_genres(fast_genres + extra, g_prefix)
-        if len(fast_genres) < 4:
+        if len(fast_genres) < 3:
             _fetch_discogs_tags(album, metadata, album_artist, track_title,
                                 fast_genres, g_prefix)
             return
@@ -247,12 +268,13 @@ def _fetch_lastfm_track_tags(album, metadata, album_artist, track_title, fast_ge
                     enriched = fast_genres
                     log.info(f"[LASTFM_T] Got: {enriched}")
                     if any(tags):
-                        tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:3]
+                        tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:2]
                         extra = [t["name"] for t in tags]
-                        metadata[LASTFM_TRACK_CACHE_KEY] = extra
-                        enriched = fast_map_genres(fast_genres + extra, g_prefix)
+                        e_extra = fast_map_genres(extra, g_prefix)
+                        metadata[LASTFM_TRACK_CACHE_KEY] = e_extra
+                        enriched = list(set(fast_genres + e_extra))
 
-                    if len(enriched) < 4:
+                    if len(enriched) < 3:
                         _fetch_discogs_tags(album, metadata, album_artist, track_title, enriched, g_prefix)
                         return
 
@@ -286,7 +308,7 @@ def _fetch_discogs_tags(album, metadata, album_artist, track_title, fast_genres,
 
     if any(discogs_cache):
         fast_genres = fast_map_genres(fast_genres + discogs_cache, g_prefix)
-        if len(fast_genres) < 4:
+        if len(fast_genres) < 3:
             _fetch_lastfm_artist_tags(album, metadata, album_artist,
                                       track_title, fast_genres, g_prefix)
             return
@@ -307,10 +329,11 @@ def _fetch_discogs_tags(album, metadata, album_artist, track_title, fast_genres,
                     else:
                         item = results[0]
                         extra = (item.get("genre", []) or []) + (item.get("style", []) or [])
-                        metadata[DISCOGS_CACHE_KEY] = extra
-                        enriched = fast_map_genres(fast_genres + extra, g_prefix)
+                        e_extra = fast_map_genres(extra, g_prefix)
+                        metadata[DISCOGS_CACHE_KEY] = e_extra
+                        enriched = list(set(fast_genres + e_extra))
 
-                    if len(enriched) < 4:
+                    if len(enriched) < 3:
                         _fetch_lastfm_artist_tags(album, metadata, album_artist, track_title, enriched, g_prefix)
                         return
 
@@ -359,13 +382,14 @@ def _fetch_lastfm_artist_tags(album, metadata, album_artist, track_title,
                     enriched = fast_genres
                     if any(tags):
                         # log.warning(f"Artist tags: {tags}")
-                        tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:3]
+                        tags = sorted(tags, key=lambda t: int(t.get("count", 0)), reverse=True)[:2]
                         extra = [t["name"] for t in tags]
-                        metadata[LASTFM_ARTIST_CACHE_KEY] = extra
+                        e_extra = fast_map_genres(extra, g_prefix)
+                        metadata[LASTFM_ARTIST_CACHE_KEY] = e_extra
                         # log.info(f"Artist tags for  {album_artist}: {extra}")
-                        if not extra:
+                        if not e_extra:
                             log.warning(f"No artist tags on last.fm for {album_artist}")
-                        enriched = fast_map_genres(fast_genres + extra, g_prefix)
+                        enriched = list(set(fast_genres + e_extra))
                         log.info(f"[LASTFM_A] Got: {enriched}")
                     _finalize_genres(metadata, enriched)
             except Exception as e:
