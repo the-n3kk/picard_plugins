@@ -62,7 +62,6 @@ def normalize_name(s):
 def compare_with_contains(string1, string2):
     s1 = normalize_name(string1)
     s2 = normalize_name(string2)
-    log.warning(f"{s1} vs {s2}")
     if s1 == s2:
         return True
     if s1 in s2:
@@ -95,14 +94,17 @@ def fast_map_genres(genres, g_prefix):
                 mapped = replacement
                 break
 
-        split_mapped = GENRE_SPLIT_PATTERN.split(mapped)
+        split_mapped = flatten_list(mapped)
         for split_genre in split_mapped:
             if g_prefix is not None:
-                if split_genre.lower() == "rock":
+                if compare_with_contains(split_genre, "rock"):
                     split_genre = f"{g_prefix} rock"
 
-                if split_genre.lower() == "pop":
+                if compare_with_contains(split_genre, "pop"):
                     split_genre = f"{g_prefix} pop"
+
+                if compare_with_contains(split_genre, "metal"):
+                    split_genre = f"{g_prefix} metal"
 
             if split_genre not in new_genres:
                 new_genres.append(split_genre.lower())
