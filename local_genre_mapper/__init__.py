@@ -21,9 +21,9 @@ GENRE_SPLIT_PATTERN = re.compile(r"[\/;,]")
 
 IGNORE_CACHE = False
 
-DISCOGS_CACHE_KEY = "discorgs_track"
-LASTFM_TRACK_CACHE_KEY = "lastfm_track"
-LASTFM_ARTIST_CACHE_KEY = "lastfm_artist"
+DISCOGS_CACHE_KEY = "genres_disco"
+LASTFM_TRACK_CACHE_KEY = "genres_fm_track"
+LASTFM_ARTIST_CACHE_KEY = "genres_fm_artist"
 MANUAL_GENRES_KEY = "manual_genres"
 
 # load resources
@@ -84,9 +84,9 @@ def fast_map_genres(genres, g_prefix):
     for genre in flat_list:
         # log.warning(f"genre {genre}")
         if any(regex.search(genre) for regex in FILTER_LIST):
-            # log.warning(f"filter match {genre}")
+            log.warning(f"filter match {genre}")
             continue
-        # log.warning(f"going with {genre}")
+        log.warning(f"going with {genre}")
         mapped = genre
 
         for regex, replacement in COMPILED_MAP:
